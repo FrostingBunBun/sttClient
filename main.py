@@ -9,8 +9,8 @@ import tempfile
 import os
 from faster_whisper import WhisperModel
 from pynput import keyboard
-from pynput.keyboard import Key, Listener
 import json
+import time
 
 # Default WebSocket URLs
 LOCAL_SERVER = "http://127.0.0.1:5000"
@@ -19,6 +19,9 @@ DEPLOYED_SERVER = "https://frostingbunbun.ru"
 # Configuration file to save keybind and mic selection
 CONFIG_FILE = "stt_config.json"
 
+# Threshold for key press time (in seconds)
+KEY_PRESS_THRESHOLD = 0.5  # If key is pressed less than 0.5 seconds, we ignore it
+
 class WhisperTranscriber:
     def __init__(self, model_size="medium", sample_rate=16000):
         self.model_size = model_size
@@ -26,6 +29,8 @@ class WhisperTranscriber:
         self.model = None  # Model will be loaded on demand
         self.is_recording = False
         self.listener = None
+        self.press_start_time = None  # Time when the key was pressed
+        self.recording_in_progress = False  # Flag to prevent multiple recordings
 
     def load_model(self):
         """Load the Whisper model."""
@@ -41,18 +46,50 @@ class WhisperTranscriber:
 
     def on_press(self, key):
         """Handle key press events."""
-        if key == self.keybind:
-            if not self.is_recording:
-                self.is_recording = True
-                print("Recording started")
+        try:
+            if str(key.char) == self.keybind:
+                if not self.is_recording and not self.recording_in_progress:
+                    self.press_start_time = time.time()  # Record the start time of the press
+                    self.is_recording = True
+                    self.recording_in_progress = True  # Set flag to prevent multiple recordings
+                    print("Recording started")
+        except AttributeError:
+            # Handle special keys like space, ctrl, etc.
+            if str(key) == self.keybind:
+                if not self.is_recording and not self.recording_in_progress:
+                    self.press_start_time = time.time()  # Record the start time of the press
+                    self.is_recording = True
+                    self.recording_in_progress = True  # Set flag to prevent multiple recordings
+                    print("Recording started")
 
     def on_release(self, key):
         """Handle key release events."""
-        if key == self.keybind:
-            if self.is_recording:
-                self.is_recording = False
-                print("Recording stopped")
-                return False
+        try:
+            if str(key.char) == self.keybind and self.press_start_time:
+                press_duration = time.time() - self.press_start_time
+                if press_duration < KEY_PRESS_THRESHOLD:
+                    print(f"Key {key.char} pressed too quickly ({press_duration:.2f}s). Ignoring.")
+                    self.is_recording = False
+                    self.recording_in_progress = False  # Reset flag
+                    return False  # Ignore quick key presses
+                if self.is_recording:
+                    self.is_recording = False
+                    self.recording_in_progress = False  # Reset flag
+                    print("Recording stopped")
+                    return False
+        except AttributeError:
+            if str(key) == self.keybind and self.press_start_time:
+                press_duration = time.time() - self.press_start_time
+                if press_duration < KEY_PRESS_THRESHOLD:
+                    print(f"Key {key} pressed too quickly ({press_duration:.2f}s). Ignoring.")
+                    self.is_recording = False
+                    self.recording_in_progress = False  # Reset flag
+                    return False  # Ignore quick key presses
+                if self.is_recording:
+                    self.is_recording = False
+                    self.recording_in_progress = False  # Reset flag
+                    print("Recording stopped")
+                    return False
 
     def set_keybind(self, keybind):
         """Set the keybind for starting/stopping recording."""
@@ -64,7 +101,7 @@ class WhisperTranscriber:
         recording = np.array([], dtype='float32').reshape(0, 1)
         frames_per_buffer = int(self.sample_rate * 0.1)
 
-        with Listener(on_press=self.on_press, on_release=self.on_release) as listener:
+        with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
             self.listener = listener
             while True:
                 if self.is_recording:
@@ -74,10 +111,10 @@ class WhisperTranscriber:
                 if not self.is_recording and len(recording) > 0:
                     break
             listener.join()
-        
+
         print(f"Recorded {len(recording)} frames.")
         return recording
-    
+
     def save_temp_audio(self, recording):
         """Save recorded audio to a temporary file and transcribe it."""
         print("Saving temp audio file for transcription...")
@@ -152,12 +189,20 @@ class STTClientApp:
         self.sio = socketio.Client()
         self.sio.on("stt_transcription_update", self.on_message)
 
-        # Connect WebSocket
-        self.connect_socket()
-
         # Initialize Whisper Transcriber
         self.transcriber = WhisperTranscriber()
-        self.transcriber.set_keybind(self.config.get("keybind", Key.space))
+        self.transcriber.set_keybind(self.config.get("keybind", "space"))
+
+        # Initialize connection status
+        self.is_connected = False
+        self.connection_in_progress = False  # Added to prevent multiple connection attempts
+        self.is_initial_connection = True
+
+        # Initial connection attempt in a separate thread
+        self.connect_socket()
+
+        # Add a flag to prevent multiple threads from being started
+        self.is_recording_thread_active = False
 
     def load_config(self):
         """Load configuration from file."""
@@ -173,75 +218,112 @@ class STTClientApp:
 
     def toggle_server(self):
         """Switch between local and deployed server"""
-        self.disconnect_socket()
-        self.connect_socket()
+        if self.is_connected:
+            self.disconnect_socket()  # Disconnect before switching
+        self.connect_socket()  # Try to reconnect to the new server
 
     def connect_socket(self):
-        """Connect to WebSocket"""
-        server_url = LOCAL_SERVER if self.test_mode.get() else DEPLOYED_SERVER
-        try:
-            self.sio.connect(server_url)
-            self.log(f"Connected to {server_url}")
-            print(f"Connected to {server_url}")  # Debugging: Confirm successful connection
-        except Exception as e:
-            self.log(f"Connection failed: {e}")
-            print(f"Connection failed: {e}")  # Debugging: If connection fails
+        """Connect to WebSocket in a separate thread."""
+        print("------------------------------")
+        def connect_thread():
+            self.connection_in_progress = True  # Set flag to true to prevent reconnection attempts
+
+            server_url = LOCAL_SERVER if self.test_mode.get() else DEPLOYED_SERVER  # Get current server URL
+            attempt_count = 0
+            max_retries = 2  # Maximum number of retry attempts
+
+            while attempt_count < max_retries:
+                try:
+                    # If it's the first connection attempt
+                    if attempt_count == 0:
+                        print(f"Attempting to connect to {server_url}...")
+                        self.log(f"Attempting to connect to {server_url}.")
+                    else:
+                        print(f"Retrying to connect to {server_url} (Attempt {attempt_count + 1})...")
+                        self.log(f"Retrying to connect to {server_url} (Attempt {attempt_count + 1})...")
+
+                    self.sio.connect(server_url)
+                    self.is_connected = True
+                    self.connection_in_progress = False  # Reset flag after successful connection
+                    self.log(f"Connected to {server_url}")
+                    break  # Exit the loop after a successful connection
+                except Exception as e:
+                    self.connection_in_progress = False  # Reset flag even on failure
+                    print(f"Connection failed: {e}")
+                    attempt_count += 1
+                    if attempt_count < max_retries:
+                        print("Retrying...")
+                        time.sleep(3)  # Wait before retrying
+                    else:
+                        self.log(f"Max retries reached. Could not connect to {server_url}.")
+                        break
+
+            if attempt_count >= max_retries and not self.is_connected:
+                self.log(f"Failed to connect after {max_retries} attempts.")
+
+        # Start the connection attempt in a new thread
+        threading.Thread(target=connect_thread, daemon=True).start()
 
 
     def disconnect_socket(self):
-        """Disconnect from WebSocket"""
+        """Disconnect from WebSocket."""
         if self.sio.connected:
             self.sio.disconnect()
+            self.is_connected = False
             self.log("Disconnected from server")
 
     def send_text(self):
-        """Send manual text input"""
+        """Send manual text input.""" 
         message = self.text_input.get().strip()
         if message:
-            print(f"Sending message: {message}")  # Debugging: Show the message being sent
+            print(f"Sending message: {message}")
             self.sio.emit("stt_transcription", message)
             self.log(f"Sent: {message}")
             self.text_input.delete(0, tk.END)
         else:
-            print("No message to send.")  # Debugging: If no message is entered
+            print("No message to send.")
 
     def on_message(self, data):
-        """Handle incoming messages"""
+        """Handle incoming messages."""
         self.log(f"Received: {data}")
 
     def log(self, message):
-        """Log messages in UI"""
+        """Log messages in UI.""" 
         self.log_area.config(state=tk.NORMAL)
         self.log_area.insert(tk.END, message + "\n")
         self.log_area.config(state=tk.DISABLED)
         self.log_area.yview(tk.END)
 
     def change_keybind(self):
-        """Change the keybind for starting/stopping recording."""
-        keybind = simpledialog.askstring("Change Keybind", "Enter a new keybind (e.g., 'space', 'ctrl', 'alt'):")
+        """Change the keybind for starting/stopping recording."""  
+        keybind = simpledialog.askstring("Change Keybind", "Enter a new keybind (e.g., 'a', 'b', 'ctrl', 'shift'):")  # Now accepts any key
         if keybind:
-            try:
-                self.config["keybind"] = getattr(Key, keybind)
-                self.transcriber.set_keybind(self.config["keybind"])
-                self.keybind_label.config(text=f"Current Keybind: {keybind}")
-                self.save_config()
-            except AttributeError:
-                self.log("Invalid keybind. Please try again.")
+            self.config["keybind"] = keybind
+            self.transcriber.set_keybind(keybind)
+            self.keybind_label.config(text=f"Current Keybind: {keybind}")
+            self.save_config()
 
     def toggle_stt(self):
-        """Start/Stop STT and load/unload the model."""
+        """Start/Stop STT and load/unload the model.""" 
         if self.listening:
+            # Stop listening
             self.listening = False
             self.stt_button.config(text="Start STT")
             self.transcriber.unload_model()  # Unload the model
+            self.is_recording_thread_active = False  # Ensure we don't start a new thread
         else:
+            # Start listening
             self.listening = True
             self.stt_button.config(text="Stop STT")
             self.transcriber.load_model()  # Load the model
-            threading.Thread(target=self.start_stt, daemon=True).start()
+            
+            # Only start the thread if it's not already active
+            if not self.is_recording_thread_active:
+                self.is_recording_thread_active = True
+                threading.Thread(target=self.start_stt, daemon=True).start()
 
     def start_stt(self):
-        """Start microphone stream and process audio in real-time."""
+        """Start microphone stream and process audio in real-time."""  
         print("Starting STT...")
         self.log("Listening...")
 
@@ -251,6 +333,7 @@ class STTClientApp:
         self.save_config()
         sd.default.device = mic_index
 
+        # Continuous recording as long as the listening flag is True
         while self.listening:
             recording = self.transcriber.record_audio()
             transcription = self.transcriber.save_temp_audio(recording)
@@ -259,6 +342,8 @@ class STTClientApp:
                 self.log(f"STT: {transcription}")
                 self.sio.emit("stt_transcription", transcription)
 
+        # After stopping the recording, reset the thread flag
+        self.is_recording_thread_active = False
 
 
 if __name__ == "__main__":
