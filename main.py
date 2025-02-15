@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import simpledialog
+from tkinter import simpledialog, ttk
 import socketio
 import threading
 import sounddevice as sd
@@ -127,7 +127,6 @@ class WhisperTranscriber:
 
         full_transcription = ""
         for segment in segments:
-            print(f"Segment text: {segment.text}")
             full_transcription += segment.text + " "
 
         os.remove(file_path)  # Delete temp file after transcription
@@ -138,52 +137,13 @@ class STTClientApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Live STT WebSocket Client")
-        self.root.geometry("500x400")
+        self.root.geometry("600x500")
 
         # Load configuration
         self.config = self.load_config()
 
         # UI Elements
-        self.label = tk.Label(root, text="Enter Text (or use mic):")
-        self.label.pack(pady=5)
-
-        self.text_input = tk.Entry(root, width=50)
-        self.text_input.pack(pady=5)
-
-        self.send_button = tk.Button(root, text="Send", command=self.send_text)
-        self.send_button.pack(pady=5)
-
-        # Server toggle checkbox
-        self.test_mode = tk.BooleanVar(value=True)
-        self.checkbox = tk.Checkbutton(root, text="Use Testing Server", variable=self.test_mode, command=self.toggle_server)
-        self.checkbox.pack(pady=5)
-
-        # Mic Selection Dropdown
-        self.mic_label = tk.Label(root, text="Select Microphone:")
-        self.mic_label.pack(pady=5)
-
-        self.mic_list = [f"{i}: {device['name']}" for i, device in enumerate(sd.query_devices())]
-        self.selected_mic = tk.StringVar()
-        self.selected_mic.set(self.mic_list[self.config.get("mic_index", 0)])  # Default to saved mic
-
-        self.mic_dropdown = tk.OptionMenu(root, self.selected_mic, *self.mic_list)
-        self.mic_dropdown.pack(pady=5)
-
-        # Keybind Selection
-        self.keybind_label = tk.Label(root, text=f"Current Keybind: {self.config.get('keybind', 'space')}")
-        self.keybind_label.pack(pady=5)
-
-        self.keybind_button = tk.Button(root, text="Change Keybind", command=self.change_keybind)
-        self.keybind_button.pack(pady=5)
-
-        # STT Toggle Button
-        self.listening = False
-        self.stt_button = tk.Button(root, text="Start STT", command=self.toggle_stt)
-        self.stt_button.pack(pady=5)
-
-        # Log area
-        self.log_area = tk.Text(root, height=10, width=60, state=tk.DISABLED)
-        self.log_area.pack(pady=5)
+        self.create_ui()
 
         # WebSocket client
         self.sio = socketio.Client()
@@ -203,6 +163,60 @@ class STTClientApp:
 
         # Add a flag to prevent multiple threads from being started
         self.is_recording_thread_active = False
+
+    def create_ui(self):
+        """Create and organize the UI elements."""
+        # Main frame
+        self.main_frame = ttk.Frame(self.root, padding="10")
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Text input field
+        self.text_input_label = ttk.Label(self.main_frame, text="Enter Text (or use mic):")
+        self.text_input_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+
+        self.text_input = ttk.Entry(self.main_frame, width=50)
+        self.text_input.grid(row=1, column=0, columnspan=2, pady=(0, 10))
+
+        # Send button
+        self.send_button = ttk.Button(self.main_frame, text="Send", command=self.send_text)
+        self.send_button.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+
+        # Server toggle checkbox
+        self.test_mode = tk.BooleanVar(value=True)
+        self.checkbox = ttk.Checkbutton(self.main_frame, text="Use Testing Server", variable=self.test_mode, command=self.toggle_server)
+        self.checkbox.grid(row=3, column=0, columnspan=2, pady=(0, 10))
+
+        # Mic Selection Dropdown
+        self.mic_label = ttk.Label(self.main_frame, text="Select Microphone:")
+        self.mic_label.grid(row=4, column=0, sticky=tk.W, pady=(0, 5))
+
+        self.mic_list = [f"{i}: {device['name']}" for i, device in enumerate(sd.query_devices())]
+        self.selected_mic = tk.StringVar()
+        self.selected_mic.set(self.mic_list[self.config.get("mic_index", 0)])  # Default to saved mic
+
+        self.mic_dropdown = ttk.Combobox(self.main_frame, textvariable=self.selected_mic, values=self.mic_list, state="readonly")
+        self.mic_dropdown.grid(row=5, column=0, columnspan=2, pady=(0, 10))
+
+        # Keybind Selection
+        self.keybind_label = ttk.Label(self.main_frame, text=f"Current Keybind: {self.config.get('keybind', 'space')}")
+        self.keybind_label.grid(row=6, column=0, sticky=tk.W, pady=(0, 5))
+
+        self.keybind_button = ttk.Button(self.main_frame, text="Change Keybind", command=self.change_keybind)
+        self.keybind_button.grid(row=7, column=0, columnspan=2, pady=(0, 10))
+
+        # STT Toggle Button
+        self.listening = False
+        self.stt_button = ttk.Button(self.main_frame, text="Start STT", command=self.toggle_stt)
+        self.stt_button.grid(row=8, column=0, columnspan=2, pady=(0, 10))
+
+        # Log area
+        self.log_area = tk.Text(self.main_frame, height=10, width=60, state=tk.DISABLED)
+        self.log_area.grid(row=9, column=0, columnspan=2, pady=(0, 10))
+
+        # Scrollbar for log area
+        self.scrollbar = ttk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.log_area.yview)
+        self.log_area.configure(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.grid(row=9, column=2, sticky=tk.NS)
 
     def load_config(self):
         """Load configuration from file."""
@@ -253,7 +267,7 @@ class STTClientApp:
                     attempt_count += 1
                     if attempt_count < max_retries:
                         print("Retrying...")
-                        time.sleep(3)  # Wait before retrying
+                        time.sleep(2)  # Wait before retrying
                     else:
                         self.log(f"Max retries reached. Could not connect to {server_url}.")
                         break
@@ -264,7 +278,6 @@ class STTClientApp:
         # Start the connection attempt in a new thread
         threading.Thread(target=connect_thread, daemon=True).start()
 
-
     def disconnect_socket(self):
         """Disconnect from WebSocket."""
         if self.sio.connected:
@@ -273,7 +286,7 @@ class STTClientApp:
             self.log("Disconnected from server")
 
     def send_text(self):
-        """Send manual text input.""" 
+        """Send manual text input."""
         message = self.text_input.get().strip()
         if message:
             print(f"Sending message: {message}")
@@ -288,14 +301,14 @@ class STTClientApp:
         self.log(f"Received: {data}")
 
     def log(self, message):
-        """Log messages in UI.""" 
+        """Log messages in UI."""
         self.log_area.config(state=tk.NORMAL)
         self.log_area.insert(tk.END, message + "\n")
         self.log_area.config(state=tk.DISABLED)
         self.log_area.yview(tk.END)
 
     def change_keybind(self):
-        """Change the keybind for starting/stopping recording."""  
+        """Change the keybind for starting/stopping recording."""
         keybind = simpledialog.askstring("Change Keybind", "Enter a new keybind (e.g., 'a', 'b', 'ctrl', 'shift'):")  # Now accepts any key
         if keybind:
             self.config["keybind"] = keybind
@@ -304,7 +317,7 @@ class STTClientApp:
             self.save_config()
 
     def toggle_stt(self):
-        """Start/Stop STT and load/unload the model.""" 
+        """Start/Stop STT and load/unload the model."""
         if self.listening:
             # Stop listening
             self.listening = False
@@ -316,14 +329,17 @@ class STTClientApp:
             self.listening = True
             self.stt_button.config(text="Stop STT")
             self.transcriber.load_model()  # Load the model
-            
+
+            # Deselect the text input field
+            self.root.focus()
+
             # Only start the thread if it's not already active
             if not self.is_recording_thread_active:
                 self.is_recording_thread_active = True
                 threading.Thread(target=self.start_stt, daemon=True).start()
 
     def start_stt(self):
-        """Start microphone stream and process audio in real-time."""  
+        """Start microphone stream and process audio in real-time."""
         print("Starting STT...")
         self.log("Listening...")
 
@@ -339,7 +355,6 @@ class STTClientApp:
             transcription = self.transcriber.save_temp_audio(recording)
             if transcription.strip():
                 print(f"Transcription: {transcription}")
-                self.log(f"STT: {transcription}")
                 self.sio.emit("stt_transcription", transcription)
 
         # After stopping the recording, reset the thread flag
