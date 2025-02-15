@@ -15,7 +15,7 @@ print(torch.cuda.is_available())
 
 
 class WhisperTranscriber:
-    def __init__(self, model_size="large-v3", sample_rate=44100):
+    def __init__(self, model_size="large-v3", sample_rate=48000):
         self.model_size = model_size
         self.sample_rate = sample_rate
         self.model = WhisperModel(model_size, device='cuda', compute_type='float32')
