@@ -10,6 +10,13 @@ from pynput import keyboard
 # Threshold for key press time (in seconds)
 KEY_PRESS_THRESHOLD = 0.5  # Ignore key presses shorter than 0.5 seconds
 
+# Word replacement dictionary
+WORD_REPLACEMENTS = {
+    "you": "u",
+    "what": "wat",
+    "okay": "oke",
+}
+
 class WhisperTranscriber:
     def __init__(self, model_size="medium", sample_rate=16000):
         self.model_size = model_size
@@ -104,6 +111,26 @@ class WhisperTranscriber:
 
         return recording
 
+    def replace_words(self, text):
+        """Replace specific words in the text based on the replacement dictionary."""
+        for word, replacement in WORD_REPLACEMENTS.items():
+            text = text.replace(word, replacement)
+        return text
+
+    def capitalize_first_letter(self, text):
+        print("Original:", text)
+        print("ASCII Codes:", [ord(c) for c in text])  # Debug each character
+    
+        text = text.lstrip()  # Remove leading spaces
+    
+        if len(text) > 0:
+            capitalized = text[0].upper() + text[1:]
+            print("Modified:", capitalized)
+            return capitalized
+        return text
+
+
+
     def save_temp_audio(self, recording):
         """Save recorded audio to a temporary file and transcribe it."""
         if len(recording) == 0:
@@ -123,4 +150,14 @@ class WhisperTranscriber:
 
         os.remove(file_path)  # Delete temp file after transcription
         print("Transcription complete.")
+
+        # Normalize text to lowercase
+        full_transcription = full_transcription.lower()
+
+        # Replace words
+        full_transcription = self.replace_words(full_transcription)
+
+        # Capitalize the first letter
+        full_transcription = self.capitalize_first_letter(full_transcription)
+
         return full_transcription
