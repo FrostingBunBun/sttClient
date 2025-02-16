@@ -4,7 +4,8 @@ import threading
 import time
 
 # WebSocket URL
-SERVER_URL = "https://frostingbunbun.ru"
+# SERVER_URL = "https://frostingbunbun.ru"
+SERVER_URL = "http://127.0.0.1:5000"
 
 class WebSocketClient:
     def __init__(self, on_message_callback, log_callback):
@@ -61,3 +62,4 @@ class WebSocketClient:
         if self.is_connected:
             self.sio.emit("stt_transcription", message)
             self.log_callback(f"Sent: {message}")
+            print(f"Sent: {message}")

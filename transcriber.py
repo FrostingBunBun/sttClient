@@ -1,4 +1,3 @@
-# transcriber.py
 import time
 import numpy as np
 import sounddevice as sd
@@ -20,6 +19,7 @@ class WhisperTranscriber:
         self.listener = None
         self.press_start_time = None  # Time when the key was pressed
         self.recording_in_progress = False  # Flag to prevent multiple recordings
+        self.ignore_recording = False  # Flag to ignore recordings with short key presses
 
     def load_model(self):
         """Load the Whisper model."""
@@ -41,6 +41,7 @@ class WhisperTranscriber:
                     self.press_start_time = time.time()  # Record the start time of the press
                     self.is_recording = True
                     self.recording_in_progress = True  # Set flag to prevent multiple recordings
+                    self.ignore_recording = False  # Reset ignore flag
                     print("Recording started")
         except AttributeError:
             # Handle special keys like space, ctrl, etc.
@@ -49,6 +50,7 @@ class WhisperTranscriber:
                     self.press_start_time = time.time()  # Record the start time of the press
                     self.is_recording = True
                     self.recording_in_progress = True  # Set flag to prevent multiple recordings
+                    self.ignore_recording = False  # Reset ignore flag
                     print("Recording started")
 
     def on_release(self, key):
@@ -58,27 +60,19 @@ class WhisperTranscriber:
                 press_duration = time.time() - self.press_start_time
                 if press_duration < KEY_PRESS_THRESHOLD:
                     print(f"Key {key.char} pressed too quickly ({press_duration:.2f}s). Ignoring.")
-                    self.is_recording = False
-                    self.recording_in_progress = False  # Reset flag
-                    return False  # Ignore quick key presses
-                if self.is_recording:
-                    self.is_recording = False
-                    self.recording_in_progress = False  # Reset flag
-                    print("Recording stopped")
-                    return False
+                    self.ignore_recording = True  # Set flag to ignore this recording
+                self.is_recording = False
+                self.recording_in_progress = False  # Reset flag
+                return False
         except AttributeError:
             if str(key) == self.keybind and self.press_start_time:
                 press_duration = time.time() - self.press_start_time
                 if press_duration < KEY_PRESS_THRESHOLD:
                     print(f"Key {key} pressed too quickly ({press_duration:.2f}s). Ignoring.")
-                    self.is_recording = False
-                    self.recording_in_progress = False  # Reset flag
-                    return False  # Ignore quick key presses
-                if self.is_recording:
-                    self.is_recording = False
-                    self.recording_in_progress = False  # Reset flag
-                    print("Recording stopped")
-                    return False
+                    self.ignore_recording = True  # Set flag to ignore this recording
+                self.is_recording = False
+                self.recording_in_progress = False  # Reset flag
+                return False
 
     def set_keybind(self, keybind):
         """Set the keybind for starting/stopping recording."""
@@ -102,10 +96,19 @@ class WhisperTranscriber:
             listener.join()
 
         print(f"Recorded {len(recording)} frames.")
+
+        # If the recording should be ignored, return an empty array
+        if self.ignore_recording:
+            print("Ignoring recording due to short key press.")
+            return np.array([], dtype='float32').reshape(0, 1)
+
         return recording
 
     def save_temp_audio(self, recording):
         """Save recorded audio to a temporary file and transcribe it."""
+        if len(recording) == 0:
+            return ""  # Return empty string if recording is ignored
+
         print("Saving temp audio file for transcription...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_wav:
             write(temp_wav.name, self.sample_rate, recording)  # Save recording as WAV
